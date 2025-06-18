@@ -1,0 +1,153 @@
+import os
+import sys
+import time
+import threading
+import requests
+from tkinter import Tk, Label, Button, messagebox
+import tkinter.font as tkfont
+from pypresence import Presence
+from pypresence.exceptions import DiscordNotFound
+
+CLIENT_ID = "1384271315032211476"
+LINK_SITE = "https://playtester.io"
+LINK_DISCORD = "https://discord.gg/playtesterhq"
+INVITE_CODE = "playtesterhq"
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+def get_discord_counts():
+    try:
+        url = f"https://discord.com/api/v9/invites/{INVITE_CODE}?with_counts=true"
+        response = requests.get(url)
+        data = response.json()
+        total = data["approximate_member_count"]
+        online = data["approximate_presence_count"]
+        return total, online
+    except:
+        return None, None
+
+class PlaytesterRPCApp:
+    def __init__(self, root):
+        self.root = root
+        root.title("Playtester.io Rich Presence")
+        try:
+            root.iconbitmap(resource_path("playtester.ico"))
+        except Exception as e:
+            print("Icon could not be loaded:", e)
+
+        self.bg_color = "#2b2b2b"
+        self.fg_color = "white"
+        root.configure(bg=self.bg_color)
+
+        default_font = tkfont.Font(family="Segoe UI", size=10)
+        root.option_add("*Font", default_font)
+        root.option_add("*Background", self.bg_color)
+        root.option_add("*Foreground", self.fg_color)
+        root.option_add("*Button.activeBackground", "#404040")
+        root.option_add("*Button.activeForeground", "white")
+
+        title_font = tkfont.Font(family="Segoe UI", size=12, weight="bold")
+        Label(root, text="Playtester.io Discord Rich Presence",
+              font=title_font, bg=self.bg_color, fg=self.fg_color).pack(pady=10)
+
+        self.status_label = Label(root, text="Status: Not Active",
+                                  bg=self.bg_color, fg=self.fg_color)
+        self.status_label.pack(pady=5)
+
+        self.start_button = Button(root, text="Start Presence", width=15, command=self.start_presence)
+        self.start_button.pack(pady=5)
+        self.stop_button = Button(root, text="Stop Presence", width=15, command=self.stop_presence, state="disabled")
+        self.stop_button.pack(pady=5)
+
+        self.rpc = None
+        self.rpc_thread = None
+        self.rpc_running = False
+        self.locked = False  # Only allow one start/stop cycle
+
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def update_presence_loop(self, start_time):
+        toggle = True
+        while self.rpc_running:
+            total, online = get_discord_counts()
+            if not total or not online:
+                total, online = "?", "?"
+            state_msg = f"{online} online / {total} members" if toggle else "~1.4K games"
+            try:
+                self.rpc.update(
+                    details="Play What's Next!",
+                    state=state_msg,
+                    large_image="design_uden_navn_48_",
+                    large_text="playtester.io",
+                    start=start_time,
+                    buttons=[
+                        {"label": "Visit playtester.io", "url": LINK_SITE},
+                        {"label": "Join Discord", "url": LINK_DISCORD}
+                    ]
+                )
+            except Exception as e:
+                print("RPC update failed:", e)
+            toggle = not toggle
+            time.sleep(15)
+
+    def start_presence(self):
+        if self.rpc_running or self.locked:
+            return
+
+        self.start_button.config(state="disabled")
+        try:
+            self.rpc = Presence(CLIENT_ID)
+            self.rpc.connect()
+            self.rpc_running = True
+            start_time = int(time.time())
+            self.rpc_thread = threading.Thread(target=self.update_presence_loop, args=(start_time,), daemon=True)
+            self.rpc_thread.start()
+            self.status_label.config(text="Status: Active")
+            self.stop_button.config(state="normal")
+        except DiscordNotFound:
+            messagebox.showerror("Error", "Could not connect to Discord. Make sure Discord is running.")
+            self.status_label.config(text="Status: Not Active")
+            self.start_button.config(state="disabled")
+            self.locked = True
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to start presence: {e}")
+            self.status_label.config(text="Status: Not Active")
+            self.start_button.config(state="disabled")
+            self.locked = True
+            self.rpc = None
+
+    def stop_presence(self):
+        if not self.rpc_running:
+            return
+
+        self.rpc_running = False
+        if self.rpc_thread is not None:
+            self.rpc_thread.join(timeout=3)
+            self.rpc_thread = None
+
+        if self.rpc is not None:
+            try:
+                self.rpc.clear()
+                self.rpc.close()
+            except Exception as e:
+                print("Error stopping RPC:", e)
+            self.rpc = None
+
+        self.status_label.config(text="Status: Not Active")
+        self.stop_button.config(state="disabled")
+        self.start_button.config(state="disabled")
+        self.locked = True  # Prevent any further use
+
+    def on_close(self):
+        self.stop_presence()
+        self.root.destroy()
+
+if __name__ == "__main__":
+    root = Tk()
+    app = PlaytesterRPCApp(root)
+    root.mainloop()
